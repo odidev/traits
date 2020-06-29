@@ -9,6 +9,7 @@
 # Thanks for using Enthought open source!
 
 import copy
+import functools
 import operator
 from weakref import ref
 
@@ -535,6 +536,37 @@ class TraitList(list):
         return self.notifiers
 
 
+def _trait_list_item_validator(value, item_trait, object_ref, trait_name):
+    """
+    Validate an item that's being added to the list.
+
+    Parameters
+    ----------
+    value : any
+        The list item value being validated.
+    item_trait : CTrait
+        The CTrait describing the List's item type
+    object_ref : weakref.ref
+        Weak reference to the object
+    trait_name : str
+        Name of the list trait on the object, used in the error message.
+    """
+
+    object = object_ref()
+    if object is None:
+        return value
+
+    trait_validator = item_trait.handler.validate
+    if trait_validator is None:
+        return value
+
+    try:
+        return trait_validator(object, trait_name, value)
+    except TraitError as excp:
+        excp.set_prefix("Each element of the")
+        raise
+
+
 class TraitListObject(TraitList):
     """ A specialization of TraitList with a default validator and notifier
     which provide bug-for-bug compatibility with the TraitListObject from
@@ -565,8 +597,10 @@ class TraitListObject(TraitList):
 
     def __init__(self, trait, object, name, value):
 
+        object_ref = ref(object)
+
         self.trait = trait
-        self.object = ref(object)
+        self.object = object_ref
         self.name = name
         self.name_items = None
         if trait.has_items:
@@ -576,13 +610,23 @@ class TraitListObject(TraitList):
         value = list(value)
         self._validate_length(len(value))
 
+        item_trait = trait.item_trait
+
+        item_validator = functools.partial(
+            _trait_list_item_validator,
+            item_trait=item_trait,
+            object_ref=object_ref,
+            trait_name=name,
+        )
+
         super().__init__(
             value,
-            item_validator=self._item_validator,
+            item_validator=item_validator,
             notifiers=[self.notifier],
         )
 
-    def notifier(self, trait_list, index, removed, added):
+    @staticmethod
+    def notifier(trait_list, index, removed, added):
         """ Converts and consolidates the parameters to a TraitListEvent and
         then fires the event.
 
@@ -598,6 +642,8 @@ class TraitListObject(TraitList):
             Values that were added
 
         """
+        self = trait_list
+
         is_trait_none = self.trait is None
         is_name_items_none = self.name_items is None
         if not hasattr(self, "trait") or is_trait_none or is_name_items_none:
@@ -845,24 +891,6 @@ class TraitListObject(TraitList):
         self.__dict__.update(state)
 
     # -- private methods ------------------------------------------------------
-
-    def _item_validator(self, value):
-        """
-        Validate an item that's being added to the list.
-        """
-        object = self.object()
-        if object is None:
-            return value
-
-        trait_validator = self.trait.item_trait.handler.validate
-        if trait_validator is None:
-            return value
-
-        try:
-            return trait_validator(object, self.name, value)
-        except TraitError as excp:
-            excp.set_prefix("Each element of the")
-            raise
 
     def _validate_length(self, new_length):
         """

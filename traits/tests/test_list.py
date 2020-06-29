@@ -8,7 +8,10 @@
 #
 # Thanks for using Enthought open source!
 
+import contextlib
+import gc
 import unittest
+import weakref
 
 from traits.api import CList, HasTraits, Instance, Int, List, Str, TraitError
 
@@ -40,6 +43,22 @@ class DeepBazBazRef(HasTraits):
 class CFoo(HasTraits):
     ints = CList(Int)
     strs = CList(Str)
+
+
+@contextlib.contextmanager
+def disabled_gc():
+    """ Temporarily disable cyclic garbage collection. """
+
+    if not gc.isenabled():
+        yield
+        return
+
+    gc.disable()
+    try:
+        yield
+    finally:
+        gc.enable()
+
 
 
 class ListTestCase(unittest.TestCase):
@@ -371,3 +390,16 @@ class ListTestCase(unittest.TestCase):
 
         with self.assertRaises(TraitError):
             f.l.clear()
+
+    def test_garbage_collection(self):
+        # Regression test for enthought/traits#1233
+
+        class Model(HasTraits):
+            foo = List()
+
+        list_object = Model().foo
+        list_ref = weakref.ref(list_object)
+        gc.collect()
+        with disabled_gc():
+            del list_object
+            self.assertIsNone(list_ref())
